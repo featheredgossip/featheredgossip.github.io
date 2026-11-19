@@ -480,11 +480,12 @@ def rb_link(kind, bird=None, design=None):
     return f"https://www.redbubble.com/people/{RB_USER}/shop?asc=u&iaCode={IA_CODES[kind]}"
 
 
-def design_link(design, kind):
-    """Isti dizajn kao nalepnica / majica / duks / svi proizvodi (pretraga po nazivu dizajna u tvom shopu)."""
+def design_link(design, kind, bird=""):
+    """Isti dizajn kao nalepnica / majica / duks / svi proizvodi (pretraga po nazivu dizajna + ptici u tvom shopu)."""
     if kind == "stickers" and design.get("url") and "sticker" in str(design.get("product_type", "")).lower():
         return design["url"]
-    return rb_search(design_phrase(design), None if kind == "all" else kind)
+    query = f"{design_phrase(design)} {bird}".strip()
+    return rb_search(query, None if kind == "all" else kind)
 
 
 # ---------------------------------------------------------------------------
@@ -900,7 +901,7 @@ GOOGLE QUALITY RULES (follow strictly):
 
 SHOP LINKS (we make our money from these, but they must feel natural and secondary):
 - {shop_note}
-- Insert 3-5 links in total, using ONLY these tokens: [[stickers|anchor text]], [[tees|anchor text]],
+- Insert 2-4 links in total (not more: the page already has a shop box), using ONLY these tokens: [[stickers|anchor text]], [[tees|anchor text]],
   [[hoodies|anchor text]], [[designs|anchor text]] (all our designs of this bird), [[shop|anchor text]] (whole shop){', [[design|anchor text]] (the featured design, exactly once)' if design else ''}.
 - Use at least 2 different token types. Never more than one shop link in a paragraph. No links in the first
   paragraph of the intro. Anchor text 2-6 words, descriptive (e.g. [[stickers|{name.lower()} stickers]]).
@@ -1000,8 +1001,8 @@ def validate_article(art, bird, angle, posts, design=None):
     if n_design > (2 if design else 0):
         issues.append("[[design|...]] may be used only once" if design else "there is no featured design, "
                       "do not use [[design|...]]")
-    if not (3 <= len(product) <= 7):
-        issues.append(f"use 3-5 shop link tokens (now {len(product)})")
+    if not (2 <= len(product) <= 5):
+        issues.append(f"use 2-4 shop link tokens (now {len(product)})")
     elif len(set(product)) < 2:
         issues.append("use at least 2 different shop link types")
     slugs = {p["slug"] for p in posts}
@@ -1434,7 +1435,7 @@ def org_ld():
 def card(p, lazy=True):
     loading = ' loading="lazy" decoding="async"' if lazy else ""
     return f"""<article class="card">
- <a class="cover" href="{u(post_path(p))}" tabindex="-1" aria-hidden="true"><img src="{post_image(p, 'thumb')}" width="600" height="338" alt=""{loading}></a>
+ <a class="cover" href="{u(post_path(p))}" tabindex="-1" aria-hidden="true"><img src="{post_image(p, 'thumb')}" width="600" height="338" alt="{esc(p.get('image_alt') or p['title'])}"{loading}></a>
  <div class="body">
   <h3><a href="{u(post_path(p))}">{esc(p['title'])}</a></h3>
   <p>{esc(p['meta_description'])}</p>
@@ -1504,7 +1505,7 @@ def hero_link_open(p):
     dz = p.get("design")
     if not dz:
         return ""
-    return f'<a href="{esc(dz.get("url") or design_link(dz, "all"))}" target="_blank" rel="noopener">'
+    return f'<a href="{esc(dz.get("url") or design_link(dz, "all", p.get("bird", "")))}" target="_blank" rel="noopener">'
 
 
 def design_box(p):
@@ -1513,9 +1514,9 @@ def design_box(p):
     img = dz.get("image") or ""
     src = u(img) if img.startswith("/") else img
     btns = [("stickers", "Sticker"), ("tees", "T-shirt"), ("hoodies", "Hoodie"), ("all", "All products")]
-    links = "".join(f'<a class="btn small" href="{esc(design_link(dz, k))}" target="_blank" rel="noopener">{t}</a>'
+    links = "".join(f'<a class="btn small" href="{esc(design_link(dz, k, bird))}" target="_blank" rel="noopener">{t}</a>'
                     for k, t in btns)
-    pic = (f'<a href="{esc(dz.get("url") or design_link(dz, "all"))}" target="_blank" rel="noopener">'
+    pic = (f'<a href="{esc(dz.get("url") or design_link(dz, "all", p.get("bird", "")))}" target="_blank" rel="noopener">'
            f'<img src="{esc(src)}" width="220" height="220" alt="{esc(dz.get("phrase", ""))} {esc(bird_name(bird))} design" '
            f'loading="lazy" decoding="async"></a>') if src else ""
     return (f'<aside class="shopbox design-box" aria-label="Featured design">{pic}<div>'
@@ -1600,7 +1601,11 @@ def render_post(p, posts, posts_by_slug):
     out += body
     if faq:
         out.append(f'<section class="faq"><h2 id="faq">Frequently asked questions</h2>{faq}</section>')
-    out.append(shop_box(bird))
+    if dz:
+        out.append(f'<p class="note">More {esc(name)} designs: <a href="{esc(rb_link("designs", bird))}" target="_blank" '
+                   f'rel="noopener">stickers, T-shirts and hoodies in our shop</a>.</p>')
+    else:
+        out.append(shop_box(bird))
     if "wiki_url" in p:          # stariji članci (pre Wikipedia izvora) nemaju proverljiv spisak izvora
         out.append(sources_html(p.get("sources"), p.get("wiki_url", "")))
     out.append("</article>\n")
@@ -1619,7 +1624,7 @@ def render_index(posts):
              "Shop hoodies"),
             ("shop", "Everything else", "Mugs, tote bags, notebooks, phone cases and 80+ more products.",
              "col-all.webp", "Visit the shop")]
-    col_html = "".join(f"""<article class="card"><a class="cover" href="{esc(rb_link(k))}" target="_blank" rel="noopener" tabindex="-1" aria-hidden="true"><img src="{u('/assets/' + img)}" width="560" height="560" alt="" loading="lazy" decoding="async"></a>
+    col_html = "".join(f"""<article class="card"><a class="cover" href="{esc(rb_link(k))}" target="_blank" rel="noopener" tabindex="-1" aria-hidden="true"><img src="{u('/assets/' + img)}" width="560" height="560" alt="Funny bird {esc(t.lower())} by {esc(SITE_NAME)}" loading="lazy" decoding="async"></a>
 <div class="body"><h3><a href="{esc(rb_link(k))}" target="_blank" rel="noopener">{esc(t)}</a></h3><p>{esc(d)}</p><a class="btn small" href="{esc(rb_link(k))}" target="_blank" rel="noopener">{esc(b)}</a></div></article>"""
                        for k, t, d, img, b in cols)
     posts_html = "".join(card(p, lazy=i > 2) for i, p in enumerate(latest)) or \
