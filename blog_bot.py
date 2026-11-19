@@ -281,7 +281,7 @@ def http_request(method, url, retries=3, backoff=4, timeout=120, **kwargs):
     for attempt in range(1, retries + 1):
         try:
             r = requests.request(method, url, timeout=timeout, **kwargs)
-            if r.status_code == 200:
+            if 200 <= r.status_code < 300:          # Apify vraća 201 kad pokrene alat
                 return r
             last = f"HTTP {r.status_code}: {redact(r.text)[:200]}"
             if r.status_code not in {408, 409, 425, 429, 500, 502, 503, 504}:
@@ -326,19 +326,34 @@ def get_client():
     return _client
 
 
-def _model_failed(model, err):
+def quota_detail(msg):
+    """Iz Gemini greške izvuče KOJA kvota je potrošena (npr. free_tier_requests, limit: 0)."""
+    metric = re.search(r"(?i)(?:quotaMetric|metric)[\"']?\s*[:=]\s*[\"']?([\w./-]+)", msg)
+    limit = re.search(r"(?i)(?:quotaValue|limit)[\"']?\s*[:=]\s*[\"']?(\d+)", msg)
+    parts = []
+    if metric:
+        parts.append(metric.group(1).split("/")[-1])
+    if limit:
+        parts.append(f"limit {limit.group(1)}")
+    return ", ".join(parts)
+
+
+def _model_failed(model, err, mode="n"):
     msg = str(err)
+    key = (model, mode)
     if "429" in msg or "RESOURCE_EXHAUSTED" in msg or "quota" in msg.lower():
-        if model not in _MODEL_DEAD:
-            print(f"    [!] {model}: kvota potrošena -> preskačem ga do kraja pokretanja")
-        _MODEL_DEAD.add(model)
+        if key not in _MODEL_DEAD:
+            detail = quota_detail(msg)
+            where = "sa Google pretragom" if mode == "g" else "bez pretrage"
+            print(f"    [!] {model} ({where}): kvota potrošena{' (' + detail + ')' if detail else ''} -> preskačem ga")
+        _MODEL_DEAD.add(key)
     elif any(s in msg for s in ("503", "UNAVAILABLE", "high demand", "disconnected", "timed out", "imeout",
                                 "500", "INTERNAL")):
         _MODEL_PAUSED[model] = time.time() + 120
 
 
-def _models_now():
-    alive = [m for m in AVAILABLE_MODELS if m not in _MODEL_DEAD]
+def _models_now(mode="n"):
+    alive = [m for m in AVAILABLE_MODELS if (m, mode) not in _MODEL_DEAD]
     ready = [m for m in alive if _MODEL_PAUSED.get(m, 0) <= time.time()]
     return ready or sorted(alive, key=lambda m: _MODEL_PAUSED.get(m, 0))
 
@@ -356,7 +371,8 @@ def gemini(prompt, json_mode=False, grounded=False, image=None, validator=None, 
         cfg["response_mime_type"] = "application/json"
     config = types.GenerateContentConfig(**cfg) if cfg else None
     last_err = None
-    models = _models_now()
+    mode = "g" if grounded else "n"
+    models = _models_now(mode)
     if not models:
         raise RuntimeError(f"Svim Gemini modelima je potrošena kvota ({label}).")
     for model in models:
@@ -373,8 +389,8 @@ def gemini(prompt, json_mode=False, grounded=False, image=None, validator=None, 
             return text
         except Exception as e:
             last_err = e
-            _model_failed(model, e)
-            if model not in _MODEL_DEAD:
+            _model_failed(model, e, mode)
+            if (model, mode) not in _MODEL_DEAD:
                 print(f"    [!] {label}: model {model} nije uspeo ({redact(e)[:120]}). Sledeći...")
             time.sleep(1)
     raise RuntimeError(f"Svi Gemini modeli su otkazali ({label}): {redact(last_err)[:200]}")
@@ -529,14 +545,37 @@ def save_shop(shop):
         json.dump(shop, f, ensure_ascii=False, indent=1)
 
 
+def apify_recent_items(max_age_hours=24):
+    """Rezultati poslednjeg USPEŠNOG pokretanja alata ako je mlađe od max_age_hours (već je plaćeno)."""
+    headers = {"Authorization": f"Bearer {APIFY_TOKEN}"}
+    try:
+        data = http_request("GET", f"https://api.apify.com/v2/acts/{APIFY_ACTOR}/runs/last?status=SUCCEEDED",
+                            headers=headers, retries=2).json().get("data") or {}
+        finished = data.get("finishedAt")
+        if not finished or not data.get("defaultDatasetId"):
+            return None
+        done = datetime.datetime.fromisoformat(finished.replace("Z", "+00:00"))
+        age_h = (datetime.datetime.now(datetime.timezone.utc) - done).total_seconds() / 3600
+        if age_h > max_age_hours:
+            return None
+        items = http_request("GET", f"https://api.apify.com/v2/datasets/{data['defaultDatasetId']}/items"
+                             f"?clean=true&format=json", headers=headers).json()
+        print(f"  ✓ koristim Apify pokretanje od pre {age_h:.1f} h ({len(items)} proizvoda), bez novog troška")
+        return items if isinstance(items, list) else None
+    except Exception as e:
+        print(f"  [!] Ne mogu da pročitam prethodno Apify pokretanje: {redact(e)[:120]}")
+        return None
+
+
 def apify_items(shop_url, max_results):
     """Pokrene Apify alat za Redbubble (asinhrono, sa čekanjem) i vrati listu proizvoda."""
+    recent = apify_recent_items()
+    if recent:
+        return recent
     headers = {"Authorization": f"Bearer {APIFY_TOKEN}", "Content-Type": "application/json"}
     payload = {"searchQueries": [], "searchUrls": [shop_url], "maxResults": max_results}
     r = http_request("POST", f"https://api.apify.com/v2/acts/{APIFY_ACTOR}/runs", headers=headers, json=payload,
                      retries=2)
-    if r.status_code not in (200, 201):
-        raise RuntimeError(f"Apify nije pokrenuo alat: HTTP {r.status_code}")
     run = r.json().get("data", {})
     run_id, dataset = run.get("id"), run.get("defaultDatasetId")
     deadline = time.time() + 15 * 60
