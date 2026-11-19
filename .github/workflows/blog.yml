@@ -1,8 +1,10 @@
 name: Feathered Gossip blog
 
 on:
-  schedule:
-    - cron: '17 7 * * *'          # svaki dan u 07:17 UTC (08:17 po našem vremenu zimi)
+  # Svaki dan ga pokreće cron-job.org (preko GitHub API-ja), pa ovde nema GitHub-ovog rasporeda.
+  # Ako jednog dana ne koristiš cron-job.org, vrati ove dve linije:
+  # schedule:
+  #   - cron: '17 7 * * *'
   workflow_dispatch:
     inputs:
       posts:
