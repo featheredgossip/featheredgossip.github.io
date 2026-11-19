@@ -1,1 +1,96 @@
+name: Feathered Gossip blog
 
+on:
+  schedule:
+    - cron: '17 7 * * *'          # svaki dan u 07:17 UTC (08:17 po našem vremenu zimi)
+  workflow_dispatch:
+    inputs:
+      posts:
+        description: 'Koliko članaka da napiše (0 = samo ponovo izgradi sajt)'
+        default: '1'
+      bird:
+        description: 'Ptica (opciono, npr. european robin)'
+        default: ''
+      angle:
+        description: 'Ugao (opciono): identification, facts, garden, where, behavior, song, lookalikes, nesting, folklore, gifts'
+        default: ''
+      refresh_shop:
+        description: 'Odmah ponovo pročitaj Redbubble shop (1 = da, troši Apify kredit)'
+        default: '0'
+  push:
+    branches: [main]
+    paths:
+      - 'assets/**'
+      - 'site_config.json'
+      - 'shop_birds.txt'
+      - 'blog_bot.py'
+      - 'birds_data.py'
+      - 'data/posts/**'
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: feathered-gossip-blog
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Instaliraj zavisnosti
+        run: pip install -r requirements.txt
+
+      - name: Napiši članak i izgradi sajt
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+          FAL_KEY: ${{ secrets.FAL_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          POSTS_PER_RUN: ${{ github.event_name == 'push' && '0' || github.event.inputs.posts || '1' }}
+          BIRD: ${{ github.event.inputs.bird }}
+          ANGLE: ${{ github.event.inputs.angle }}
+          SHOP_REFRESH: ${{ github.event.inputs.refresh_shop }}
+        run: |
+          if [ "$POSTS_PER_RUN" = "0" ]; then
+            python blog_bot.py --rebuild
+          else
+            python blog_bot.py
+          fi
+
+      - name: Sačuvaj članke u repozitorijum
+        if: always()
+        run: |
+          git config user.name "feathered-gossip-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Blog $(date -u +%F)" || echo "Nema promena za čuvanje"
+          git pull --rebase
+          git push
+
+      - uses: actions/configure-pages@v6
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
