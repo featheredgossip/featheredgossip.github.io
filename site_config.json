@@ -1,0 +1,19 @@
+{
+  "site_name": "Feathered Gossip",
+  "tagline": "Birds with opinions.",
+  "site_url": "https://featheredgossip.github.io",
+  "redbubble_user": "WolfBeat-Shop",
+  "shop_url": "https://wolfbeat-shop.redbubble.com",
+  "contact_email": "",
+  "google_site_verification": "",
+  "pinterest_verification": "",
+  "promo_text": "",
+  "social": {
+    "pinterest": "",
+    "instagram": ""
+  },
+  "apify_actor": "solidcode~redbubble-com-scraper",
+  "shop_refresh_days": 7,
+  "shop_max_results": 120,
+  "shop_scrape_url": ""
+}

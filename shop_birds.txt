@@ -1,0 +1,5 @@
+# Ptice koje imaš u shopu, a koje bot iz nekog razloga nije sam prepoznao (jedna po redu, malim slovima).
+# Bot inače SAM čita shop preko Apify-ja i prepoznaje ptice, pa ovaj fajl obično ostaje prazan.
+# Primer:
+# european robin
+# northern cardinal
