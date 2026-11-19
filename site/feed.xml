@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/" xmlns:atom="http://www.w3.org/2005/Atom">
+<channel>
+<title>Feathered Gossip</title>
+<link>https://featheredgossip.github.io/</link>
+<atom:link href="https://featheredgossip.github.io/feed.xml" rel="self" type="application/rss+xml"/>
+<description>Birds with opinions. Fact-checked bird articles and birding humor.</description>
+<language>en</language>
+<lastBuildDate>Thu, 19 Nov 2026 12:01:16 +0000</lastBuildDate>
+
+</channel>
+</rss>
