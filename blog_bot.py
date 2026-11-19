@@ -774,11 +774,55 @@ def pick_topic(posts, d, shop=None):
 # ---------------------------------------------------------------------------
 # 1) ISTRAŽIVANJE
 # ---------------------------------------------------------------------------
+WIKI_TITLES = {
+    "wren": ["Eurasian wren"], "magpie": ["Eurasian magpie"], "bullfinch": ["Eurasian bullfinch"],
+    "jackdaw": ["Western jackdaw"], "crow": ["Crow"], "barn owl": ["Barn owl", "Western barn owl"],
+    "pied wagtail": ["White wagtail"], "chaffinch": ["Common chaffinch"], "blue tit": ["Eurasian blue tit"],
+    "rock pigeon": ["Rock dove"], "flamingo": ["Flamingo"],
+}
+WIKI_CUT = re.compile(r"\n==+\s*(See also|References|External links|Further reading|Notes|Sources|Bibliography|"
+                      r"Citations|Footnotes)\s*==+", re.I)
+
+
+def wikipedia(bird):
+    """Besplatan izvor činjenica: Wikipedia članak o vrsti (čist tekst, bez referenci). Vraća (tekst, url)."""
+    titles = WIKI_TITLES.get(bird, []) + [bird[:1].upper() + bird[1:]]
+    headers = {"User-Agent": f"FeatheredGossipBot/1.0 ({SITE_URL})"}
+    for title in titles:
+        try:
+            r = http_request("GET", "https://en.wikipedia.org/w/api.php", headers=headers, retries=2, timeout=40,
+                             params={"action": "query", "format": "json", "prop": "extracts|info", "inprop": "url",
+                                     "explaintext": 1, "redirects": 1, "titles": title})
+            pages = (r.json().get("query") or {}).get("pages") or {}
+            page = next(iter(pages.values()), {})
+            text = page.get("extract") or ""
+            if "missing" in page or len(text) < 2000 or "may refer to" in text[:400]:
+                continue
+            m = WIKI_CUT.search(text)
+            text = (text[:m.start()] if m else text)[:18000]
+            print(f"  ✓ Wikipedia: {page.get('title')} ({len(text)} znakova)")
+            return text, page.get("fullurl") or f"https://en.wikipedia.org/wiki/{quote_plus(title.replace(' ', '_'))}"
+        except Exception as e:
+            print(f"  [!] Wikipedia ({title}) nije dostupna: {redact(e)[:100]}")
+    return "", ""
+
+
 def research(bird, angle):
+    """Vraća (beleške, info). Činjenice dolaze iz Wikipedia članka (uvek besplatno) i, ako Gemini kvota dozvoli,
+    iz Google pretrage."""
     name = bird_name(bird)
-    prompt = f"""You are a careful ornithology researcher. Use Google Search to collect ACCURATE facts about the
-{name} ({bird}), as seen in {region_text(bird)}. Prefer: RSPB, BTO, Cornell Lab (All About Birds, Birds of the World),
-Audubon, The Wildlife Trusts, BirdLife, IUCN. {SEARCH_HINTS.get(bird, "")}
+    wiki_text, wiki_url = wikipedia(bird)
+    source_block = ""
+    if wiki_text:
+        source_block = f"""
+
+SOURCE TEXT (the Wikipedia article about this species; facts from it are reliable, mark them "(Wikipedia)",
+or with the organisation the text itself names):
+<<<
+{wiki_text}
+>>>"""
+    prompt = f"""You are a careful ornithology researcher. Collect ACCURATE facts about the {name} ({bird}), as seen in
+{region_text(bird)}. {SEARCH_HINTS.get(bird, "")}{source_block}
 
 Write plain text notes with these headings: SCIENTIFIC NAME; SIZE (length, wingspan, weight in metric and imperial);
 IDENTIFICATION (adult male, female, juvenile; key field marks); VOICE (song and calls described in words);
@@ -788,14 +832,19 @@ LOOK-ALIKES (and how to tell them apart); GARDEN / BACKYARD TIPS (foods, feeders
 SURPRISING FACTS (at least 6); NAMES AND FOLKLORE (origin of the name, old names, cultural links).
 Extra detail for this article: {ANGLES[angle]['goal']}
 
-After every fact write the source organisation in brackets, e.g. (RSPB). If something is not certain, write "unknown"
-instead of guessing. Numbers must come from a source."""
+After every fact write its source in brackets, e.g. (Wikipedia) or (RSPB). If something is not certain, write
+"unknown" instead of guessing. Numbers must come from a source."""
+    info = {"grounded": False, "wiki_url": wiki_url}
     try:
-        return gemini(prompt, grounded=True, validator=lambda t: len(t) > 900, label="istraživanje")
+        notes = gemini(prompt + "\nAlso use Google Search to check and extend the facts (prefer RSPB, BTO, Cornell Lab, "
+                       "Audubon, BirdLife, IUCN).", grounded=True, validator=lambda t: len(t) > 900, label="istraživanje")
+        info["grounded"] = True
+        return notes, info
     except Exception as e:
-        print(f"  [!] Istraživanje sa Google pretragom nije uspelo ({redact(e)[:120]}), radim bez pretrage")
-        return gemini(prompt + "\nOnly include well-established facts you are sure about.",
-                      validator=lambda t: len(t) > 900, label="istraživanje bez pretrage")
+        print(f"  [!] Istraživanje sa Google pretragom nije uspelo ({redact(e)[:90]}); radim "
+              f"{'iz Wikipedia članka' if wiki_text else 'bez izvora'}")
+    extra = "" if wiki_text else "\nOnly include well-established facts you are sure about."
+    return gemini(prompt + extra, validator=lambda t: len(t) > 900, label="istraživanje bez pretrage"), info
 
 
 # ---------------------------------------------------------------------------
@@ -1189,8 +1238,8 @@ def create_post(posts, shop=None):
     bird, angle, design = topic
     print(f"\n=== {bird_name(bird)} / {angle} / dizajn: {design['title'] if design else '-'} ===")
     t0 = time.time()
-    notes = research(bird, angle)
-    print(f"  ✓ istraživanje ({len(notes)} znakova)")
+    notes, rinfo = research(bird, angle)
+    print(f"  ✓ istraživanje ({len(notes)} znakova{', sa Google pretragom' if rinfo['grounded'] else ''})")
     art = write_article(bird, angle, notes, posts, design)
     print(f"  ✓ članak: {art['title']}")
     problems = fact_check(art, bird, notes)
@@ -1220,7 +1269,8 @@ def create_post(posts, shop=None):
         "meta_description": clean_line(art["meta_description"], 165),
         "primary_keyword": clean_line(art.get("primary_keyword", ""), 80),
         "intro": art["intro"], "quick_facts": art["quick_facts"], "sections": art["sections"], "faq": art["faq"],
-        "sources": art.get("sources", []), "image": f"/blog/images/{slug}.jpg" if has_img else "",
+        "sources": (art.get("sources", []) if rinfo["grounded"] else []) + (["Wikipedia"] if rinfo["wiki_url"] else []),
+        "wiki_url": rinfo["wiki_url"], "image": f"/blog/images/{slug}.jpg" if has_img else "",
         "image_alt": clean_line(art.get("image_alt") or f"Illustration of a {bird_name(bird)}", 125),
         "words": len(strip_tokens(plain_text(art)).split()),
     }
@@ -1421,10 +1471,15 @@ def anchor_id(text, used):
     return aid
 
 
-def sources_html(names):
+def sources_html(names, wiki_url=""):
     seen, out = set(), []
     for n in names or []:
         low = str(n).lower()
+        if "wikipedia" in low:
+            if wiki_url and "Wikipedia" not in seen:
+                seen.add("Wikipedia")
+                out.append(f'<a href="{esc(wiki_url)}" rel="noopener" target="_blank">Wikipedia</a>')
+            continue
         for key, (label, url) in TRUSTED_SOURCES.items():
             if key in low and label not in seen:
                 seen.add(label)
@@ -1432,7 +1487,7 @@ def sources_html(names):
     if not out:
         return ""
     return ('<p class="sources"><strong>Sources:</strong> ' + ", ".join(out) +
-            '. Facts were gathered from these organisations, and every article is fact-checked against them '
+            '. Facts were gathered from these sources, and every article is fact-checked against them '
             f'before publishing. Spotted a mistake? <a href="{u("/about.html")}#contact">Tell us</a>.</p>\n')
 
 
@@ -1546,7 +1601,8 @@ def render_post(p, posts, posts_by_slug):
     if faq:
         out.append(f'<section class="faq"><h2 id="faq">Frequently asked questions</h2>{faq}</section>')
     out.append(shop_box(bird))
-    out.append(sources_html(p.get("sources")))
+    if "wiki_url" in p:          # stariji članci (pre Wikipedia izvora) nemaju proverljiv spisak izvora
+        out.append(sources_html(p.get("sources"), p.get("wiki_url", "")))
     out.append("</article>\n")
     out.append(rel_html)
     out.append(foot())
@@ -1598,8 +1654,8 @@ def render_index(posts):
 {f'<section class="block"><div class="wrap"><h2>Browse by bird</h2>{chips}</div></section>' if chips else ''}
 <section class="block"><div class="wrap page" style="padding:0">
  <h2>Who is behind Feathered Gossip?</h2>
- <p>We are a small independent bird-design shop. Our articles are researched from trusted birding sources such as
- the RSPB, BTO and the Cornell Lab of Ornithology, and every one is fact-checked before it goes live.
+ <p>We are a small independent bird-design shop. Our articles are researched from trusted sources, every one is
+ fact-checked before it goes live, and each lists the sources it is based on.
  <a href="{u('/about.html')}">Read how we write our articles</a>.</p>
 </div></section>
 """ + foot())
@@ -1692,10 +1748,11 @@ for people who love birds, from brand-new backyard birders to people with a well
 and a few birders' favourites from further away. You will find identification guides, surprising facts, the science
 behind odd bird behaviour, tips for making your garden or backyard bird-friendly, and the occasional gift guide.</p>
 <h2>How our articles are made</h2>
-<p>Every article starts with research from trusted ornithology sources such as the RSPB, the BTO, the Cornell Lab of
-Ornithology, the National Audubon Society and BirdLife International. We draft articles with the help of AI writing
-tools, using only the researched facts, and then run a separate fact-check against those sources before anything
-is published. Each article lists the organisations it is based on.</p>
+<p>Every article starts with research: the species' Wikipedia article (which is built on the ornithological
+literature) and, where available, trusted bird organisations such as the RSPB, the BTO, the Cornell Lab of
+Ornithology and the National Audubon Society. We draft articles with the help of AI writing tools, using only the
+researched facts, and then run a separate fact-check before anything is published. Each article lists the sources it
+is based on.</p>
 <p>We are bird lovers, not a scientific institution. If you spot a mistake, we really want to know and we will fix
 it quickly.</p>
 <h2>Our designs</h2>
