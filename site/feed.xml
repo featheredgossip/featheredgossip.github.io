@@ -6,7 +6,17 @@
 <atom:link href="https://featheredgossip.github.io/feed.xml" rel="self" type="application/rss+xml"/>
 <description>Birds with opinions. Fact-checked bird articles and birding humor.</description>
 <language>en</language>
-<lastBuildDate>Fri, 20 Nov 2026 08:06:01 +0000</lastBuildDate>
+<lastBuildDate>Sat, 21 Nov 2026 08:02:04 +0000</lastBuildDate>
+<item>
+ <title>How to Identify a Northern Cardinal: Field Marks and Song</title>
+ <link>https://featheredgossip.github.io/blog/northern-cardinal-identification.html</link>
+ <guid isPermaLink="true">https://featheredgossip.github.io/blog/northern-cardinal-identification.html</guid>
+ <pubDate>Sat, 21 Nov 2026 08:02:04 +0000</pubDate>
+ <description>Learn accurate Northern Cardinal identification with this guide covering field marks, distinctive songs, and unique behavioral traits for birders.</description>
+ <category>Northern Cardinal</category>
+ <enclosure url="https://featheredgossip.github.io/blog/images/northern-cardinal-identification.jpg" type="image/jpeg" length="0"/>
+ <media:content url="https://featheredgossip.github.io/blog/images/northern-cardinal-identification.jpg" medium="image" type="image/jpeg" width="1200" height="675"/>
+</item>
 <item>
  <title>How to Identify a Snowy Owl: Field Marks and Behavior</title>
  <link>https://featheredgossip.github.io/blog/snowy-owl-identification.html</link>
