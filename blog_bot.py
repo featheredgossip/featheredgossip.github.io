@@ -349,7 +349,7 @@ def _model_failed(model, err, mode="n"):
         _MODEL_DEAD.add(key)
     elif any(s in msg for s in ("503", "UNAVAILABLE", "high demand", "disconnected", "timed out", "imeout",
                                 "500", "INTERNAL")):
-        _MODEL_PAUSED[model] = time.time() + 120
+        _MODEL_PAUSED[model] = time.time() + 45
 
 
 def _models_now(mode="n"):
@@ -358,7 +358,9 @@ def _models_now(mode="n"):
     return ready or sorted(alive, key=lambda m: _MODEL_PAUSED.get(m, 0))
 
 
-def gemini(prompt, json_mode=False, grounded=False, image=None, validator=None, label="gemini"):
+def gemini(prompt, json_mode=False, grounded=False, image=None, validator=None, label="gemini", quality=False):
+    """quality=True (pisanje članka): prvo jači modeli; ako su zauzeti (503), sačeka ih do 2 puta,
+    a 'lite' modele koristi tek na kraju - oni pišu prekratke članke."""
     client = get_client()
     contents = prompt
     if image is not None:
@@ -372,27 +374,44 @@ def gemini(prompt, json_mode=False, grounded=False, image=None, validator=None, 
     config = types.GenerateContentConfig(**cfg) if cfg else None
     last_err = None
     mode = "g" if grounded else "n"
-    models = _models_now(mode)
-    if not models:
+    rounds = 3 if quality else 1
+    for rnd in range(rounds):
+        if quality and rnd < rounds - 1:
+            full = [m for m in AVAILABLE_MODELS if "lite" not in m and (m, mode) not in _MODEL_DEAD]
+            if not full:
+                continue
+            models = [m for m in full if _MODEL_PAUSED.get(m, 0) <= time.time()]
+            if not models:
+                wait = min(60, max(5, min(_MODEL_PAUSED.get(m, 0) for m in full) - time.time()))
+                print(f"    … {label}: jači modeli su zauzeti, čekam {wait:.0f} s")
+                time.sleep(wait)
+                models = [m for m in full if _MODEL_PAUSED.get(m, 0) <= time.time()] or full[:1]
+        else:
+            models = _models_now(mode)
+            if quality:
+                models = sorted(models, key=lambda m: "lite" in m)
+        for model in models:
+            try:
+                kwargs = {"model": model, "contents": contents}
+                if config is not None:
+                    kwargs["config"] = config
+                resp = client.models.generate_content(**kwargs)
+                text = (getattr(resp, "text", None) or "").strip()
+                if not text:
+                    raise ValueError("prazan odgovor")
+                if validator is not None and not validator(text):
+                    raise ValueError("odgovor ne prolazi proveru oblika")
+                if quality:
+                    print(f"    ({label}: {model})")
+                return text
+            except Exception as e:
+                last_err = e
+                _model_failed(model, e, mode)
+                if (model, mode) not in _MODEL_DEAD:
+                    print(f"    [!] {label}: model {model} nije uspeo ({redact(e)[:120]}). Sledeći...")
+                time.sleep(1)
+    if last_err is None:
         raise RuntimeError(f"Svim Gemini modelima je potrošena kvota ({label}).")
-    for model in models:
-        try:
-            kwargs = {"model": model, "contents": contents}
-            if config is not None:
-                kwargs["config"] = config
-            resp = client.models.generate_content(**kwargs)
-            text = (getattr(resp, "text", None) or "").strip()
-            if not text:
-                raise ValueError("prazan odgovor")
-            if validator is not None and not validator(text):
-                raise ValueError("odgovor ne prolazi proveru oblika")
-            return text
-        except Exception as e:
-            last_err = e
-            _model_failed(model, e, mode)
-            if (model, mode) not in _MODEL_DEAD:
-                print(f"    [!] {label}: model {model} nije uspeo ({redact(e)[:120]}). Sledeći...")
-            time.sleep(1)
     raise RuntimeError(f"Svi Gemini modeli su otkazali ({label}): {redact(last_err)[:200]}")
 
 
@@ -896,7 +915,7 @@ GOOGLE QUALITY RULES (follow strictly):
 - Never use these phrases: {", ".join(BANNED_PHRASES[:24])}.
 - Headings: 5-8 H2 sections. Use the questions people actually search as headings where natural
   (e.g. "What does a {name} sound like?"). Optional H3 sub-sections. No heading longer than 70 characters.
-- Length: 1100-1600 words in total (intro + sections + FAQ).
+- Length: 1000-1500 words in total (intro + sections + FAQ). Fewer than 900 words will be rejected.
 - Formatting inside text: **bold** for 3-8 key terms (not whole sentences). Lists via the "bullets" field.
 
 SHOP LINKS (we make our money from these, but they must feel natural and secondary):
@@ -978,8 +997,8 @@ def validate_article(art, bird, angle, posts, design=None):
         issues.append("faq must have 3-5 items")
     text = plain_text(art)
     words = len(strip_tokens(text).split())
-    if words < 950:
-        issues.append(f"the article has only {words} words, write 1100-1600")
+    if words < 800:
+        issues.append(f"the article has only {words} words, write 1000-1500")
     if words > 2100:
         issues.append(f"the article has {words} words, keep it under 1700")
     low = text.lower()
@@ -1017,24 +1036,180 @@ def validate_article(art, bird, angle, posts, design=None):
     return issues
 
 
+# Sitnice koje kod sam ispravlja (umesto da zbog njih ceo članak piše ponovo)
+SOFT_FIX = {
+    "furthermore,": "also,", "moreover,": "also,", "in conclusion,": "all in all,", "in conclusion": "all in all",
+    "it's important to note that": "note that", "it's important to note": "note", "delves into": "looks at",
+    "delve into": "look at", "delve": "look", "dive into": "look at", "a plethora of": "plenty of",
+    "plethora": "lot", "bustling": "busy", "nestled": "tucked", "embark on": "start", "treasure trove": "goldmine",
+    "look no further": "start here", "game-changer": "big help", "game changer": "big help",
+    "a must-have": "a favourite", "rest assured": "don't worry", "in today's": "in the",
+    "navigating the": "handling the", "unleash": "release", "elevate your": "improve your",
+    "testament to": "sign of", "in the realm of": "in", "vibrant tapestry": "rich mix", "symphony of": "chorus of",
+    "tapestry": "mix",
+}
+_SOFT_RE = [(re.compile(re.escape(k), re.I), v) for k, v in sorted(SOFT_FIX.items(), key=lambda kv: -len(kv[0]))]
+POSSESSIVE_RE = re.compile(r"(?i)\b(my|our)\s+(garden|backyard|feeder|binoculars|local patch)\b")
+LINK_SENTENCES = {
+    "stickers": ("If this bird has won you over, our [[stickers|{l} stickers]] carry the same attitude.",
+                 "For more birds with attitude, see our [[stickers|funny bird stickers]]."),
+    "tees": ("You can wear the attitude too: see our [[tees|{l} T-shirts]].",
+             "Our [[tees|funny bird T-shirts]] are made for people like you."),
+    "designs": ("All our [[designs|{l} designs]] are in the shop.",
+                "All our [[designs|funny bird designs]] are in the shop."),
+    "hoodies": ("For colder days there are [[hoodies|{l} hoodies]] too.",
+                "For colder days there are [[hoodies|bird hoodies]] too."),
+    "shop": ("For more birds with opinions, browse our [[shop|funny bird designs]].",
+             "For more birds with opinions, browse our [[shop|funny bird designs]]."),
+}
+
+
+def _map_text(art, fn):
+    def m(x):
+        return fn(x) if isinstance(x, str) else x
+    art["intro"] = [m(p) for p in art.get("intro", []) or []]
+    for sec in art.get("sections", []) or []:
+        if not isinstance(sec, dict):
+            continue
+        sec["heading"] = m(sec.get("heading", ""))
+        sec["paragraphs"] = [m(p) for p in sec.get("paragraphs", []) or []]
+        if sec.get("bullets"):
+            sec["bullets"] = [m(b) for b in sec["bullets"]]
+        for sub in sec.get("subsections", []) or []:
+            if isinstance(sub, dict):
+                sub["heading"] = m(sub.get("heading", ""))
+                sub["paragraphs"] = [m(p) for p in sub.get("paragraphs", []) or []]
+    for f in art.get("faq", []) or []:
+        if isinstance(f, dict):
+            f["q"], f["a"] = m(f.get("q", "")), m(f.get("a", ""))
+    for k in ("title", "h1", "meta_description"):
+        if isinstance(art.get(k), str):
+            art[k] = fn(art[k])
+
+
+def _soft_replace(text):
+    for rx, rep_ in _SOFT_RE:
+        text = rx.sub(lambda mm: (rep_[:1].upper() + rep_[1:]) if mm.group(0)[:1].isupper() else rep_, text)
+    text = POSSESSIVE_RE.sub(lambda mm: ("Your " if mm.group(1)[:1].isupper() else "your ") + mm.group(2), text)
+    return re.sub(r"  +", " ", text)
+
+
+def _product_tokens(art):
+    return [t for t, _ in TOKEN_RE.findall(plain_text(art)) if not t.startswith("post:")]
+
+
+def _append_sentence(art, sentence):
+    secs = [x for x in art.get("sections", []) or [] if isinstance(x, dict) and x.get("paragraphs")]
+    if not secs:
+        return
+    free = [x for x in secs if not any(TOKEN_RE.search(str(p)) for p in x["paragraphs"])]
+    target = (free or secs)[-1] if len(free or secs) < 3 else (free or secs)[-2]
+    target["paragraphs"][-1] = str(target["paragraphs"][-1]).rstrip() + " " + sentence
+
+
+def auto_fix(art, bird, design=None):
+    """Popravi u kodu: zabranjene fraze, 'my garden', linkove u prvom pasusu, previše/premalo linkova ka shopu."""
+    if not isinstance(art, dict):
+        return art
+    _map_text(art, _soft_replace)
+    if art.get("intro") and isinstance(art["intro"][0], str):
+        art["intro"][0] = TOKEN_RE.sub(lambda mm: mm.group(2), art["intro"][0])
+    state = {"n": 0, "d": 0}
+
+    def limit(mm):
+        kind = mm.group(1)
+        if kind.startswith("post:"):
+            return mm.group(0)
+        if kind == "design":
+            if not design or state["d"] >= 1:
+                return mm.group(2)
+            state["d"] += 1
+            state["n"] += 1
+            return mm.group(0)
+        state["n"] += 1
+        return mm.group(0) if state["n"] <= 4 else mm.group(2)
+    _map_text(art, lambda t: TOKEN_RE.sub(limit, t))
+    name = bird_name(bird)
+    if design and "design" not in _product_tokens(art):
+        _append_sentence(art, f'It is also the bird behind our [[design|"{design_phrase(design)}" design]].')
+    shop_bird = in_shop(bird)
+    for kind in (["stickers", "tees", "designs", "hoodies"] if shop_bird else ["shop", "stickers", "tees"]):
+        prods = _product_tokens(art)
+        if len(prods) >= 2 and len(set(prods)) >= 2:
+            break
+        if kind in prods:
+            continue
+        _append_sentence(art, LINK_SENTENCES[kind][0 if shop_bird else 1].format(l=name.lower()))
+    return art
+
+
+def is_hard(issue):
+    if any(k in issue for k in ("missing", "personal experiences", "raw URLs", "does not exist", "broken",
+                                "nije JSON", "invalid response")):
+        return True
+    m = re.search(r"only (\d+) words", issue)
+    return bool(m and int(m.group(1)) < 700)
+
+
+def expand_article(art, bird, notes):
+    words = len(strip_tokens(plain_text(art)).split())
+    prompt = f"""Expand this article JSON about the {bird_name(bird)}. It has {words} words; it needs 1050-1450.
+Keep the same JSON keys, the title, slug, meta_description and every existing [[...]] link token exactly as they are.
+- Add 1-2 NEW sections with genuinely useful information from the research notes that the article does not cover
+  yet (keep the total at most 8 sections; if there are already 8, make the existing sections longer instead).
+- Add concrete detail (1-2 sentences) to sections that are thin.
+- If the FAQ has fewer than 5 items, add one.
+- Facts ONLY from the research notes. No personal experiences ("I saw", "my garden"), no raw URLs, no new link
+  tokens. Never use these phrases: {", ".join(BANNED_PHRASES[:24])}.
+
+RESEARCH NOTES:
+<<<
+{notes[:10000]}
+>>>
+
+ARTICLE JSON:
+{json.dumps(art, ensure_ascii=False)}
+
+Return the full expanded JSON object."""
+    return extract_json(gemini(prompt, json_mode=True, validator=json_ok, label="proširenje", quality=True))
+
+
 def write_article(bird, angle, notes, posts, design=None):
-    feedback = []
-    art = None
+    feedback, best, best_score = [], None, None
     for attempt in range(1, 4):
         prompt = build_write_prompt(bird, angle, notes, posts, feedback, design)
         try:
-            art = extract_json(gemini(prompt, json_mode=True, validator=json_ok, label="pisanje"))
+            art = extract_json(gemini(prompt, json_mode=True, validator=json_ok, label="pisanje", quality=True))
         except Exception as e:
             feedback = [f"invalid response: {redact(e)[:100]}"]
+            print(f"  ⟳ Pokušaj {attempt}: {feedback[0]}")
             continue
-        feedback = validate_article(art, bird, angle, posts, design)
-        if not feedback:
+        if not isinstance(art, dict):
+            feedback = ["odgovor nije JSON objekat"]
+            continue
+        auto_fix(art, bird, design)
+        issues = validate_article(art, bird, angle, posts, design)
+        if any("words, write" in i for i in issues):        # prekratak: proširi isti tekst umesto novog pisanja
+            try:
+                bigger = expand_article(art, bird, notes)
+                if isinstance(bigger, dict):
+                    auto_fix(bigger, bird, design)
+                    issues2 = validate_article(bigger, bird, angle, posts, design)
+                    print(f"  ↗ prošireno na {len(strip_tokens(plain_text(bigger)).split())} reči")
+                    if sum(map(is_hard, issues2)) <= sum(map(is_hard, issues)) and len(issues2) <= len(issues):
+                        art, issues = bigger, issues2
+            except Exception as e:
+                print(f"  [!] proširenje nije uspelo: {redact(e)[:120]}")
+        if not issues:
             return art
-        print(f"  ⟳ Pokušaj {attempt}: {'; '.join(feedback)[:300]}")
-    # poslednja šansa: popravi sitnice u kodu
-    if art and isinstance(art, dict) and not [f for f in feedback if "missing" in f or "words" in f]:
-        print("  ⚠ Objavljujem uz sitne nedostatke koje kod sam popravlja")
-        return art
+        score = (sum(map(is_hard, issues)), len(issues))
+        if best is None or score < best_score:
+            best, best_score = art, score
+        feedback = issues
+        print(f"  ⟳ Pokušaj {attempt}: {'; '.join(issues)[:300]}")
+    if best is not None and best_score[0] == 0:
+        print("  ⚠ Objavljujem najbolju verziju (ostale su samo sitnice)")
+        return best
     raise RuntimeError("Gemini nije napisao dovoljno dobar članak: " + "; ".join(feedback)[:300])
 
 
@@ -1078,9 +1253,10 @@ ERRORS:
 
 ARTICLE JSON:
 {json.dumps(art, ensure_ascii=False)}"""
-    fixed = extract_json(gemini(prompt, json_mode=True, validator=json_ok, label="ispravka činjenica"))
+    fixed = extract_json(gemini(prompt, json_mode=True, validator=json_ok, label="ispravka činjenica", quality=True))
+    auto_fix(fixed, bird, design)
     issues = validate_article(fixed, bird, angle, posts, design)
-    hard = [i for i in issues if "missing" in i or "words" in i or "does not exist" in i]
+    hard = [i for i in issues if is_hard(i)]
     if hard:
         raise RuntimeError("ispravljen članak više ne prolazi proveru: " + "; ".join(hard))
     return fixed
@@ -1942,7 +2118,7 @@ def main():
     if failed:
         tg(f"⚠ {SITE_NAME}: članak nije napravljen danas.\n" + "\n".join(failed))
     if POSTS_PER_RUN and not made:
-        sys.exit(1)
+        print("::warning title=Članak nije napravljen::" + (failed[0] if failed else "nepoznat razlog")[:180])
 
 
 if __name__ == "__main__":
