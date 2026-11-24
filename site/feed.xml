@@ -6,7 +6,17 @@
 <atom:link href="https://featheredgossip.github.io/feed.xml" rel="self" type="application/rss+xml"/>
 <description>Birds with opinions. Fact-checked bird articles and birding humor.</description>
 <language>en</language>
-<lastBuildDate>Sun, 22 Nov 2026 08:05:07 +0000</lastBuildDate>
+<lastBuildDate>Tue, 24 Nov 2026 09:37:16 +0000</lastBuildDate>
+<item>
+ <title>How to Identify a Bullfinch: Field Marks, Call and Behaviour</title>
+ <link>https://featheredgossip.github.io/blog/bullfinch-identification.html</link>
+ <guid isPermaLink="true">https://featheredgossip.github.io/blog/bullfinch-identification.html</guid>
+ <pubDate>Tue, 24 Nov 2026 09:37:16 +0000</pubDate>
+ <description>Master bullfinch identification with key field marks, male and female plumage details, distinct calls, habitat clues, and breeding habits.</description>
+ <category>Bullfinch</category>
+ <enclosure url="https://featheredgossip.github.io/blog/images/bullfinch-identification.jpg" type="image/jpeg" length="0"/>
+ <media:content url="https://featheredgossip.github.io/blog/images/bullfinch-identification.jpg" medium="image" type="image/jpeg" width="1200" height="675"/>
+</item>
 <item>
  <title>How to Identify a European Robin: Field Marks and Song</title>
  <link>https://featheredgossip.github.io/blog/european-robin-identification.html</link>
