@@ -6,7 +6,17 @@
 <atom:link href="https://featheredgossip.github.io/feed.xml" rel="self" type="application/rss+xml"/>
 <description>Birds with opinions. Fact-checked bird articles and birding humor.</description>
 <language>en</language>
-<lastBuildDate>Wed, 25 Nov 2026 08:05:56 +0000</lastBuildDate>
+<lastBuildDate>Thu, 26 Nov 2026 08:03:06 +0000</lastBuildDate>
+<item>
+ <title>How to Identify a Goldcrest: Field Marks, Song and Behaviour</title>
+ <link>https://featheredgossip.github.io/blog/goldcrest-identification.html</link>
+ <guid isPermaLink="true">https://featheredgossip.github.io/blog/goldcrest-identification.html</guid>
+ <pubDate>Thu, 26 Nov 2026 08:03:06 +0000</pubDate>
+ <description>Learn how to spot and identify the Goldcrest using key field marks, male and female plumage differences, high-pitched calls, and look-alike tips.</description>
+ <category>Goldcrest</category>
+ <enclosure url="https://featheredgossip.github.io/blog/images/goldcrest-identification.jpg" type="image/jpeg" length="0"/>
+ <media:content url="https://featheredgossip.github.io/blog/images/goldcrest-identification.jpg" medium="image" type="image/jpeg" width="1200" height="675"/>
+</item>
 <item>
  <title>Dark-eyed Junco Identification: Field Marks and Calls</title>
  <link>https://featheredgossip.github.io/blog/dark-eyed-junco-identification.html</link>
